@@ -1,0 +1,14 @@
+{
+  "name": "mq",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "amqplib": "^0.3.2",
+    "async": "^1.4.2",
+    "node-uuid": "^1.4.3",
+    "winston": "^1.0.1"
+  }
+}
