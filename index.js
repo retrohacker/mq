@@ -117,7 +117,7 @@ function registerHandler(key,callback) {
       if(e) return cb(e)
       messages.on(key,function(content,msg) {
         winston.debug("Received msg!")
-        callback(null,content,function(e,response) {
+        callback(null,JSON.stringify(content),function(e,response) {
           m.send(msg.properties.replyTo,JSON.stringify(e||response),{correlationId:msg.properties.correlationId})
         })
       })
