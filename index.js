@@ -1,77 +1,152 @@
 var winston = require('winston')
-winston.level = 'debug'
 var amq = require('amqplib/callback_api')
 var async = require('async')
 var uuid = require('node-uuid')
 var uniq_id = uuid.v4()
 var CONN = null
 var messages = new (require('events').EventEmitter)()
-winston.debug(messages)
-var channel = null
-var Qs = []
-var CBs = []
 
 var m = module.exports = {}
-
-m.on = function(queue,cb) {
-  async.waterfall([
-    establishChannel,
-    assertQueue(queue),
-    registerListener(queue)
-  ],function(e) {
-    if(e) return winston.error(e)
-    else winston.info("Listening for ",queue)
-    messages.on(queue,cb)
-  })
-}
-
-function establishChannel(cb) {
-  if(channel) return cb()
-  winston.debug("Establishing a channel")
-  CONN.createChannel(function(e,ch) {
-    if(e) return cb(e)
-    channel=ch
-    return cb()
-  })
-}
-
-function assertQueue(queue,opts) {
-  return function(cb) {
-    winston.debug("Asserting Queue ",queue)
-    return channel.assertQueue(queue,opts,function(){return cb()})
-  }
-}
-
-function registerListener(queue) {
-  return function(cb) {
-    if(Qs[queue]) return cb()
-    winston.debug("Registering Listener for ",queue)
-    Qs[queue] = true
-    channel.consume(queue,function(msg) {
-      if(msg !== null) {
-        channel.ack(msg)
-        messages.emit(queue,msg.content.toString(),msg)
-      }
-    })
-    return cb()
-  }
-}
-
-m.send = function send(queue,data,opts) {
-  async.waterfall([
-    establishChannel,
-    assertQueue(queue)
-  ],function(e) {
-    if(e) return winston.error(e)
-    winston.debug("Sending  [[",data,"]] to ",queue)
-    return channel.sendToQueue(queue,new Buffer(data),opts)
-  })
-}
 
 m.connect = function connect(cb) {
   async.during(singleConnect,waitingForConnection,function(e) {
     return cb(e)
   })
+}
+
+m.request = function request(event,obj,cb) {
+  winston.debug("Requesting",event)
+  if(typeof obj === "function") {
+    cb = obj
+    obj = null
+  }
+  setup(event,function(e,channel) {
+    winston.debug("Asserting a callback queue")
+    if(e) return cleanup(e,channel,cb)
+    // Generate Callback Queue
+    var cid = uuid.v4()
+    assertCallbackQueue(channel,cid,cb,function(e) {
+      if(e) return clenaup(e,channel,cb)
+      send(channel,event,obj,cid)
+    })
+  })
+}
+
+m.provide = function provide(event,cb) {
+  winston.debug("Providing",event)
+  setup(event,function(e,channel) {
+    if(e) return cleanup(e,channel,cb)
+    setupConsumer(channel,event,function(msg) {
+      var error = null
+      var message = null
+      try {
+        message = JSON.parse(msg.content.toString())
+      }
+      catch(e) {
+        error = e
+      }
+      return cb(message,function(e,res) {
+        //TODO
+      })
+    })
+  })
+}
+
+m.broadcast = function broadcast() {
+}
+
+m.subscribe = function subscribe() {
+}
+
+m.produce = function produce() {
+}
+
+m.consume = function consume() {
+}
+
+// Handles all the tedious stuff involved with channels, etc.
+function setup(event,broadcast,cb) {
+  winston.debug("Setting up a channel")
+  if(typeof broadcast === "function") {
+    cb=broadcast
+    broadcast=null
+  }
+  if(!CONN) cb(new Error("No connection to RabbitMQ Established"))
+  CONN.createChannel(function createdChannel(e,channel) {
+    if(e) return cb(e)
+    return assertQueue(channel,event,function assertedQueue(e) {
+      winston.debug("Asserted the queue for",event)
+      if(e) return cb(e)
+      return cb(null,channel)
+    })
+  })
+}
+
+function cleanup(e,channel,cb) {
+  winston.debug("Cleaning up channel...")
+  winston.error(e)
+  if(!channel || !channel.close) return cb()
+  return channel.close(function closedChannel(){
+    return cb(e)
+  })
+}
+
+/**
+ * Creates a queue in RabbitMQ.
+ * If the isCallback value is truthy, then the queue will only
+ * last for as long as the connection.
+ */
+function assertQueue(channel,queue,cb) {
+  winston.debug("Asserting a queue for",queue)
+  var opts = null
+  channel.assertQueue(queue,opts,cb)
+}
+
+/**
+ * Creates a callback queue that only exists for the life of the connection.
+ */
+function assertCallbackQueue(channel,id,callback,cb) {
+  winston.debug("Creating a callback queue",id)
+  assertQueue(channel,id,function(e) {
+    if(e) return cb(e)
+    // register listener
+    setupConsumer(channel,id,function(msg) {
+      var error = null
+      var message = null
+      try {
+        var message = JSON.parse(msg.content.toString())
+      } catch(e) {
+        error = e
+      }
+      callback(error,msg)
+    },true,cb)
+  })
+}
+
+function setupConsumer(channel,queue,callback,isCallback,cb) {
+  winston.debug("Creating a consumer of",queue)
+  cb = cb || function() {}
+  if(typeof isCallback === "function") {
+    cb = isCallback
+    isCallback = null
+  }
+  var opts = null
+  if(isCallback) opts = { "exclusive":true,"noAck":true,"priority":Number.MAX_VALUE }
+  channel.consume(queue,function(msg) {
+    //TODO: Figure out why this is an array of bytes and not an object
+    if(isCallback) return channel.deleteQueue(queue)
+    winston.debug(msg)
+    callback(msg)
+  },opts,function(e) {
+   cb(e)
+  })
+}
+
+function send(channel,event,message,id) {
+  winston.debug("Sending to",event)
+  var opts = null
+  if(id) opts = { correlationId:id, replyTo:id }
+  channel.sendToQueue(event,new Buffer(JSON.stringify(message),opts))
 }
 
 function singleConnect(cb) {
@@ -85,68 +160,4 @@ function singleConnect(cb) {
 function waitingForConnection(cb) {
   winston.info("Connection to rabbitmq failed, retrying...")
   setTimeout(cb,1000)
-}
-
-m.trigger = function trigger(key,value,cb) {
-  winston.debug("Calling ",key," with values ",value)
-  async.waterfall([
-    establishChannel,
-    assertCallbackQueue,
-    assertQueue(key),
-    generateRCP(key,value,cb)
-  ],function(e) {
-    if(e) return winston.error(e)
-  })
-}
-
-m.handle = function handle(key,cb) {
-  winston.debug("Registering handler for",key)
-  async.waterfall([
-    establishChannel,
-    assertQueue(key),
-    registerHandler(key,cb)
-  ],function(e) {
-    if(e) return winston.error(e)
-  })
-}
-
-function registerHandler(key,callback) {
-  return function(cb) {
-    winston.debug("Registering listener for handler for",key)
-    registerListener(key)(function(e) {
-      if(e) return cb(e)
-      messages.on(key,function(content,msg) {
-        winston.debug("Received msg!")
-        callback(null,JSON.parse(content),function(e,response) {
-          m.send(msg.properties.replyTo,JSON.stringify(e||response),{correlationId:msg.properties.correlationId})
-        })
-      })
-      return cb()
-    })
-  }
-}
-
-function generateRCP(key,value,callback) {
-  return function(cb) {
-    winston.debug("Generating RCP:",key,value)
-    var cid = uuid.v4()
-    CBs[cid] = callback
-    channel.sendToQueue(key,new Buffer(JSON.stringify(value)),{correlationId:cid,replyTo:uniq_id})
-  }
-}
-
-function assertCallbackQueue(cb) {
-  winston.debug("Creating a callback queue")
-  assertQueue(uniq_id)(function(e) {
-    if(e) return cb(e)
-    registerListener(uniq_id)(function(e) {
-      if(e) return cb(e)
-      messages.on(uniq_id,function(content,msg) {
-        winston.debug("Received callback!")
-        var id = msg.properties.correlationId
-        if(id&&CBs[id]) CBs[id](JSON.parse(content))
-      })
-      return cb()
-    })
-  })
 }

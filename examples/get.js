@@ -18,11 +18,15 @@ mq.connect(function(e) {
 
 })
 
+var count = 0
 function trigger(key,value) {
   mq.trigger(key,value,function(e,user) {
     console.log("WOAH! I GOT A RESPONSE!")
     if(e) console.log("trigger:",typeof e,"e:",e)
     if(user) console.log("trigger:",typeof user,"user:",user)
-    trigger(key,e)
+    if(count++ < 10)
+      return trigger(key,e)
+    else
+      return mq.close()
   })
 }

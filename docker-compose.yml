@@ -1,0 +1,6 @@
+mq:
+  image: rabbitmq
+test:
+  build: .
+  links:
+    - mq
