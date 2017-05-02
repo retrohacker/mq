@@ -9,10 +9,10 @@
   "author": "William Blankenship <william.jblankenship@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "amqplib": "^0.3.2",
-    "async": "^1.4.2",
+    "amqplib": "^0.5.1",
+    "async": "^2.4.0",
     "node-uuid": "^1.4.3",
-    "winston": "^1.0.1"
+    "winston": "^2.3.1"
   },
   "devDependencies": {
     "tape": "^4.2.0",
